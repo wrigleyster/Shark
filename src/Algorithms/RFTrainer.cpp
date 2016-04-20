@@ -36,7 +36,6 @@
 #include <shark/Algorithms/Trainers/RFTrainer.h>
 #include <shark/Models/Trees/RFClassifier.h>
 #include <boost/range/algorithm_ext/iota.hpp>
-#include <boost/range/algorithm/random_shuffle.hpp>
 #include <shark/Data/DataView.h>
 #include <set>
 #include <shark/Core/OpenMP.h>
@@ -106,13 +105,16 @@ void RFTrainer::train(RFClassifier& model, RegressionDataset const& dataset)
 	std::size_t subsetSize = static_cast<std::size_t>(dataset.numberOfElements()*m_OOBratio);
 	DataView<RegressionDataset const> elements(dataset);
 
+	auto seed = static_cast<unsigned>(Rng::discrete(0,(unsigned)-1));
+
 	//Generate m_B trees
 	SHARK_PARALLEL_FOR(int b = 0; b < (int)m_B; ++b){
+		Rng::rng_type rng{seed + b};
 		//For each tree generate a subset of the dataset
 		//generate indices of the dataset (pick k out of n elements)
 		std::vector<std::size_t> subsetIndices(dataset.numberOfElements());
 		boost::iota(subsetIndices,0);
-		boost::random_shuffle(subsetIndices);
+		std::random_shuffle(subsetIndices.begin(),subsetIndices.end(),DiscreteUniform<>{rng});
 
 		// create oob indices
 		std::vector<std::size_t>::iterator oobStart = subsetIndices.begin() + subsetSize;
@@ -131,7 +133,7 @@ void RFTrainer::train(RFClassifier& model, RegressionDataset const& dataset)
 			labels.push_back(dataTrain.element(i).label);
 		}
 
-		CARTClassifier<RealVector>::TreeType tree = buildTree(tables, dataTrain, labels, 0);
+		CARTClassifier<RealVector>::TreeType tree = buildTree(tables, dataTrain, labels, 0, rng);
 		CARTClassifier<RealVector> cart(tree, m_inputDimension);
 
 		// if oob error or importances have to be computed, create an oob sample
@@ -141,7 +143,7 @@ void RFTrainer::train(RFClassifier& model, RegressionDataset const& dataset)
 
 			// if importances should be computed, oob errors are computed implicitly
 			if(m_computeFeatureImportances){
-				cart.computeFeatureImportances(dataOOB);
+				cart.computeFeatureImportances(dataOOB, rng);
 			} // if importances should not be computed, only compute the oob errors
 			else{
 				cart.computeOOBerror(dataOOB);
@@ -181,13 +183,16 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 	std::size_t subsetSize = static_cast<std::size_t>(dataset.numberOfElements()*m_OOBratio);
 	DataView<ClassificationDataset const> elements(dataset);
 
+	auto seed = static_cast<unsigned>(Rng::discrete(0,(unsigned)-1));
+
 	//Generate m_B trees
 	SHARK_PARALLEL_FOR(int b = 0; b < (int)m_B; ++b){
+		Rng::rng_type rng{seed + b};
 		//For each tree generate a subset of the dataset
 		//generate indices of the dataset (pick k out of n elements)
 		std::vector<std::size_t> subsetIndices(dataset.numberOfElements());
 		boost::iota(subsetIndices,0);
-		boost::random_shuffle(subsetIndices);
+		std::random_shuffle(subsetIndices.begin(),subsetIndices.end(),DiscreteUniform<>{rng});
 
 		// create oob indices
 		std::vector<std::size_t>::iterator oobStart = subsetIndices.begin() + subsetSize;
@@ -202,7 +207,7 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 		createAttributeTables(dataTrain.inputs(), tables);
 		auto cAbove = createCountMatrix(dataTrain);
 
-		CARTClassifier<RealVector>::TreeType tree = buildTree(tables, dataTrain, cAbove, 0);
+		CARTClassifier<RealVector>::TreeType tree = buildTree(tables, dataTrain, cAbove, 0, rng);
 		CARTClassifier<RealVector> cart(tree, m_inputDimension);
 
 		// if oob error or importances have to be computed, create an oob sample
@@ -212,7 +217,7 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 
 			// if importances should be computed, oob errors are computed implicitly
 			if(m_computeFeatureImportances){
-				cart.computeFeatureImportances(dataOOB);
+				cart.computeFeatureImportances(dataOOB,rng);
 			} // if importances should not be computed, only compute the oob errors
 			else{
 				cart.computeOOBerror(dataOOB);
@@ -256,7 +261,8 @@ void RFTrainer::setOOBratio(double ratio){
 CARTClassifier<RealVector>::TreeType RFTrainer::
 buildTree(AttributeTables& tables,
 		  ClassificationDataset const& dataset,
-		  ClassVector& cAbove, std::size_t nodeId ){
+		  ClassVector& cAbove, std::size_t nodeId,
+		  Rng::rng_type& rng){
 	CARTClassifier<RealVector>::TreeType lTree, rTree;
 
 	//Construct tree
@@ -283,8 +289,7 @@ buildTree(AttributeTables& tables,
 				cBestAbove{m_labelCardinality};
 
 		//Randomly select the attributes to test for split
-		set<std::size_t> tableIndicies;
-		generateRandomTableIndicies(tableIndicies);
+		auto tableIndicies = generateRandomTableIndicies(rng);
 
 		//Index of attributes
 		std::size_t bestAttributeIndex = 0, bestAttributeValIndex = 0;
@@ -335,8 +340,8 @@ buildTree(AttributeTables& tables,
 			nodeInfo.leftNodeId = 2*nodeId+1;
 			nodeInfo.rightNodeId = 2*nodeId+2;
 
-			lTree = buildTree(lTables, dataset, cBestBelow, nodeInfo.leftNodeId);
-			rTree = buildTree(rTables, dataset, cBestAbove, nodeInfo.rightNodeId);
+			lTree = buildTree(lTables, dataset, cBestBelow, nodeInfo.leftNodeId, rng);
+			rTree = buildTree(rTables, dataset, cBestAbove, nodeInfo.rightNodeId, rng);
 		}else{
 			//Leaf node
 			isLeaf = true;
@@ -375,7 +380,11 @@ RealVector RFTrainer::hist(ClassVector const& countVector) const {
 	return histogram;
 }
 
-CARTClassifier<RealVector>::TreeType RFTrainer::buildTree(AttributeTables& tables, RegressionDataset const& dataset, std::vector<RealVector> const& labels, std::size_t nodeId ){
+CARTClassifier<RealVector>::TreeType RFTrainer::
+buildTree(AttributeTables& tables,
+		  RegressionDataset const& dataset,
+		  std::vector<RealVector> const& labels,
+		  std::size_t nodeId, Rng::rng_type& rng){
 
 	//Construct tree
 	CARTClassifier<RealVector>::NodeInfo nodeInfo;
@@ -404,8 +413,7 @@ CARTClassifier<RealVector>::TreeType RFTrainer::buildTree(AttributeTables& table
 		RealVector labelSumAbove(m_labelDimension), labelSumBelow(m_labelDimension);
 
 		//Randomly select the attributes to test for split
-		set<std::size_t> tableIndicies;
-		generateRandomTableIndicies(tableIndicies);
+		auto tableIndicies = generateRandomTableIndicies(rng);
 
 		//Index of attributes
 		std::size_t bestAttributeIndex = 0, bestAttributeValIndex = 0;
@@ -476,8 +484,8 @@ CARTClassifier<RealVector>::TreeType RFTrainer::buildTree(AttributeTables& table
 			nodeInfo.leftNodeId = 2*nodeId+1;
 			nodeInfo.rightNodeId = 2*nodeId+2;
 
-			lTree = buildTree(lTables, dataset, lLabels, nodeInfo.leftNodeId);
-			rTree = buildTree(rTables, dataset, rLabels, nodeInfo.rightNodeId);
+			lTree = buildTree(lTables, dataset, lLabels, nodeInfo.leftNodeId, rng);
+			rTree = buildTree(rTables, dataset, rLabels, nodeInfo.rightNodeId, rng);
 		}else{
 			//Leaf node
 			isLeaf = true;
@@ -560,11 +568,14 @@ void RFTrainer::splitAttributeTables(AttributeTables const& tables, std::size_t 
 
 
 ///Generates a random set of indices
-void RFTrainer::generateRandomTableIndicies(set<std::size_t>& tableIndicies){
+set<std::size_t> RFTrainer::generateRandomTableIndicies(Rng::rng_type& rng) const {
+	set<std::size_t> tableIndicies;
+	DiscreteUniform<> discrete{rng,0,m_inputDimension-1};
 	//Draw the m_try Generate the random attributes to search for the split
 	while(tableIndicies.size()<m_try){
-		tableIndicies.insert( rand() % m_inputDimension);
+		tableIndicies.insert(discrete());
 	}
+	return tableIndicies;
 }
 
 ///Calculates the Gini impurity of a node. The impurity is defined as
