@@ -179,11 +179,12 @@ protected:
 	std::size_t m_inputDimension;
 
 	/// size of labels
-	std::size_t m_labelDimension;
-
-	/// maximum size of the histogram;
-	/// classification case: maximum number of classes
-	unsigned int m_maxLabel;
+	union {
+        ///Dimension of a label. Used in Regression
+		std::size_t m_labelDimension;
+		///Holds the number of distinct labels. Used in Classification
+		std::size_t m_labelCardinality;
+	};
 
 	/// number of attributes to randomly test at each inner node
 	std::size_t m_try;
