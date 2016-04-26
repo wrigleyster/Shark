@@ -37,6 +37,7 @@
 
 #include <shark/Models/Trees/CARTClassifier.h>
 #include <shark/Models/MeanModel.h>
+#include <shark/Data/DataView.h>
 
 namespace shark {
 
@@ -62,15 +63,22 @@ public:
 	std::string name() const
 	{ return "RFClassifier"; }
 
+	void computeOOBerror(){} // TODO: delete
+
 	// compute the oob error for the forest
-	void computeOOBerror(){
-		std::size_t n_trees = numberOfModels();
-		m_OOBerror = 0;
-		for(std::size_t j=0;j!=n_trees;++j){
-			m_OOBerror += m_models[j].OOBerror();
-		}
-		m_OOBerror /= n_trees;
+	void computeOOBerror(
+			UIntMatrix const& oobClassTally,
+			DataView<ClassificationDataset const>& elements){
+		auto n_elements = elements.size();
+		m_OOBerror = sum<double>(n_elements,
+								 [&](size_t i){
+									 auto y = elements[i].label;
+									 auto z = argmax(oobClassTally.row_begin(i),oobClassTally.row_end(i));
+									 return y!=z;
+								 }
+		)/n_elements;
 	}
+
 
 	// compute the feature importances for the forest
 	void computeFeatureImportances(){
@@ -147,10 +155,40 @@ protected:
 	std::size_t m_inputDimension;
 
 	// oob error for the forest
-	double m_OOBerror;
+	double m_OOBerror = 0.;
 
 	// feature importances for the forest
 	RealVector m_featureImportances;
+private:
+// Helper functions
+	template<class Iterator>
+	inline std::size_t argmax(Iterator begin, Iterator end) const {
+		std::size_t maxIndex = 0;
+		typename Iterator::value_type max = 0.;
+		for(Iterator i = begin; i<end; ++i){
+			if(*i>max){
+				max = *i;
+				maxIndex = i.index();
+			}
+		}
+		return maxIndex;
+	}
+	template<class Container>
+	inline std::size_t argmax(Container c) const {
+		return argmax(std::begin(c),std::end(c));
+	}
+
+	template<class T, class F>
+	inline T sum(std::size_t i, std::size_t n, F&& f) const {
+		T out{};
+		for(;i<n;++i) out += f(i);
+		return out;
+	}
+	template<class T, class F>
+	inline T sum(std::size_t n, F&& f) const {
+		return sum<T>(0,n,std::forward<F>(f));
+	}
+//END Helper functions
 
 };
 
