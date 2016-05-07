@@ -285,9 +285,9 @@ void RFTrainer::setOOBratio(double ratio){
 CARTClassifier<RealVector>::TreeType RFTrainer::
 buildTree(AttributeTables& tables,
 		  ClassificationDataset const& dataset,
-		  ClassVector& cAbove, std::size_t nodeId,
+		  ClassVector& cFull, std::size_t nodeId,
 		  Rng::rng_type& rng){
-	CARTClassifier<RealVector>::TreeType lTree, rTree;
+	CARTClassifier<RealVector>::TreeType lTree, rTree, tree;
 
 	//Construct tree
 	CARTClassifier<RealVector>::NodeInfo nodeInfo;
@@ -305,79 +305,68 @@ buildTree(AttributeTables& tables,
 	std::size_t n = tables[0].size();
 
 	bool isLeaf = false;
-	if(gini(cAbove,tables[0].size())==0 || n <= m_nodeSize){
-		isLeaf = true;
-	}else{
-		//Count matrices
-		ClassVector cBelow{m_labelCardinality},cBestBelow{m_labelCardinality},
-				cBestAbove{m_labelCardinality};
+	if(gini(cFull,tables[0].size())==0 || n <= m_nodeSize){
+		nodeInfo.label = hist(cFull);
+		tree.push_back(nodeInfo);
+		return tree;
+	}
+	//Count matrices
+	ClassVector const cEmpty{m_labelCardinality};
+	ClassVector cAbove, cBelow, cBestBelow, cBestAbove;
 
-		//Randomly select the attributes to test for split
-		auto tableIndicies = generateRandomTableIndicies(rng);
+	//Randomly select the attributes to test for split
+	auto tableIndicies = generateRandomTableIndicies(rng);
 
-		//Index of attributes
-		std::size_t bestAttributeIndex = 0, bestAttributeValIndex = 0;
+	//Index of attributes
+	std::size_t bestAttributeIndex = 0, bestAttributeValIndex = 0;
 
-		//Attribute values
-		double bestAttributeVal;
-		double bestImpurity = n+1.0;
+	//Attribute values
+	double bestAttributeVal;
+	double bestImpurity = n+1.0;
 
-		for (std::size_t attributeIndex : tableIndicies){
-			auto cTmpAbove = cAbove;
-			std::fill(cBelow.begin(),cBelow.end(),0);
-			for(std::size_t i=1; i<n; ++i){
-				std::size_t prev = i-1;
+	for (std::size_t attributeIndex : tableIndicies){
+        auto& attribTable = tables[attributeIndex];
+		cAbove = cFull;   cBelow = cEmpty;
+		for(std::size_t prev=0, i=1; i<n; prev=i++){
+			auto prevLabel = dataset.element(attribTable[prev].id).label;
 
-				//Update the count of the label
-				++cBelow[dataset.element(tables[attributeIndex][prev].id).label];
-				--cTmpAbove[dataset.element(tables[attributeIndex][prev].id).label];
+			// Update the count of the label
+			++cBelow[prevLabel];   --cAbove[prevLabel];
+			if(attribTable[prev].value==attribTable[i].value) continue;
 
-				if(tables[attributeIndex][prev].value!=tables[attributeIndex][i].value){
-					//n1 = Number of cases to the left child node
-					//n2 = number of cases to the right child node
-					std::size_t n1 = i;
-					std::size_t n2 = n-n1;
+			// n1/n2 = Number of cases to the left/right child node
+			std::size_t n1 = i,     n2 = n-i;
 
-					//Calculate the Gini impurity of the split
-					double impurity = n1*gini(cBelow,n1)+n2*gini(cTmpAbove,n2);
-					if(impurity<bestImpurity){
-						//Found a more pure split, store the attribute index and value
-						bestImpurity = impurity;
-						bestAttributeIndex = attributeIndex;
-						bestAttributeValIndex = prev;
-						bestAttributeVal = tables[attributeIndex][bestAttributeValIndex].value;
-						cBestAbove = cTmpAbove;
-						cBestBelow = cBelow;
-					}
-				}
+			//Calculate the Gini impurity of the split
+			double impurity = n1*gini(cBelow,n1)+n2*gini(cAbove,n2);
+			if(impurity<bestImpurity){
+				//Found a more pure split, store the attribute index and value
+				bestImpurity = impurity;
+				bestAttributeIndex = attributeIndex;
+				bestAttributeValIndex = prev;
+				bestAttributeVal = attribTable[bestAttributeValIndex].value;
+				cBestAbove = cAbove;
+				cBestBelow = cBelow;
 			}
 		}
-
-		if(bestImpurity<n+1){
-			AttributeTables rTables, lTables;
-			splitAttributeTables(tables, bestAttributeIndex, bestAttributeValIndex, lTables, rTables);
-			tables.clear();
-			//Continue recursively
-
-			nodeInfo.attributeIndex = bestAttributeIndex;
-			nodeInfo.attributeValue = bestAttributeVal;
-			nodeInfo.leftNodeId = 2*nodeId+1;
-			nodeInfo.rightNodeId = 2*nodeId+2;
-
-			lTree = buildTree(lTables, dataset, cBestBelow, nodeInfo.leftNodeId, rng);
-			rTree = buildTree(rTables, dataset, cBestAbove, nodeInfo.rightNodeId, rng);
-		}else{
-			//Leaf node
-			isLeaf = true;
-		}
-
 	}
 
-	//Store entry in the tree table
-	CARTClassifier<RealVector>::TreeType tree;
+	if(bestImpurity<n+1){
+		AttributeTables rTables, lTables;
+		splitAttributeTables(tables, bestAttributeIndex, bestAttributeValIndex, lTables, rTables);
+		tables.clear();
+		//Continue recursively
 
-	if(isLeaf){
-		nodeInfo.label = hist(cAbove);
+		nodeInfo.attributeIndex = bestAttributeIndex;
+		nodeInfo.attributeValue = bestAttributeVal;
+		nodeInfo.leftNodeId = 2*nodeId+1;
+		nodeInfo.rightNodeId = 2*nodeId+2;
+
+		lTree = buildTree(lTables, dataset, cBestBelow, nodeInfo.leftNodeId, rng);
+		rTree = buildTree(rTables, dataset, cBestAbove, nodeInfo.rightNodeId, rng);
+	}else{
+		//Leaf node
+		nodeInfo.label = hist(cFull);
 		tree.push_back(nodeInfo);
 		return tree;
 	}

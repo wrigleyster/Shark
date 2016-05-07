@@ -149,7 +149,7 @@ protected:
 	SHARK_EXPORT_SYMBOL void splitAttributeTables(AttributeTables const& tables, std::size_t index, std::size_t valIndex, AttributeTables& LAttributeTables, AttributeTables& RAttributeTables);
 
 	/// Build a decision tree for classification
-	SHARK_EXPORT_SYMBOL CARTClassifier<RealVector>::TreeType buildTree(AttributeTables& tables, ClassificationDataset const& dataset, ClassVector& cAbove, std::size_t nodeId, Rng::rng_type& rng);
+	SHARK_EXPORT_SYMBOL CARTClassifier<RealVector>::TreeType buildTree(AttributeTables& tables, ClassificationDataset const& dataset, ClassVector& cFull, std::size_t nodeId, Rng::rng_type& rng);
 
 	/// Builds a decision tree for regression
 	SHARK_EXPORT_SYMBOL CARTClassifier<RealVector>::TreeType buildTree(AttributeTables& tables, RegressionDataset const& dataset, std::vector<RealVector> const& labels, std::size_t nodeId, Rng::rng_type& rng);
