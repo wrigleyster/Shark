@@ -35,7 +35,6 @@
 
 #include <shark/Algorithms/Trainers/RFTrainer.h>
 #include <shark/Models/Trees/RFClassifier.h>
-#include <boost/range/algorithm_ext/iota.hpp>
 #include <shark/Data/DataView.h>
 #include <set>
 #include <unordered_map>
@@ -114,7 +113,7 @@ void RFTrainer::train(RFClassifier& model, RegressionDataset const& dataset)
 		//For each tree generate a subset of the dataset
 		//generate indices of the dataset (pick k out of n elements)
 		std::vector<std::size_t> subsetIndices(dataset.numberOfElements());
-		boost::iota(subsetIndices,0);
+		std::iota(subsetIndices.begin(),subsetIndices.end(),0);
 		std::random_shuffle(subsetIndices.begin(),subsetIndices.end(),DiscreteUniform<>{rng});
 
 		// create oob indices
@@ -170,38 +169,40 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 {
 	model.clearModels();
 
-	//Store the number of input dimensions
 	m_inputDimension = inputDimension(dataset);
-
 	model.setInputDimension(m_inputDimension);
-
 	m_labelCardinality = numberOfClasses(dataset);
+	auto n_elements = dataset.numberOfElements();
 
 	m_regressionLearner = false;
 	setDefaults();
 
 	//we need direct element access since we need to generate element-wise subsets
-	std::size_t subsetSize = static_cast<std::size_t>(dataset.numberOfElements()*m_OOBratio);
+	std::size_t subsetSize = static_cast<std::size_t>(n_elements*m_OOBratio);
 	DataView<ClassificationDataset const> elements(dataset);
 
 	auto seed = static_cast<unsigned>(Rng::discrete(0,(unsigned)-1));
+
+	auto oobClassTally = UIntMatrix{n_elements,m_labelCardinality};
 
 	//Generate m_B trees
 	SHARK_PARALLEL_FOR(std::uint32_t b = 0; b < m_B; ++b){
 		Rng::rng_type rng{seed + b};
 		//For each tree generate a subset of the dataset
 		//generate indices of the dataset (pick k out of n elements)
-		std::vector<std::size_t> subsetIndices(dataset.numberOfElements());
-		boost::iota(subsetIndices,0);
-		std::random_shuffle(subsetIndices.begin(),subsetIndices.end(),DiscreteUniform<>{rng});
+		std::vector<std::size_t> trainIndices(n_elements);
+		std::iota(trainIndices.begin(),trainIndices.end(),0);
+		std::random_shuffle(trainIndices.begin(),trainIndices.end(),DiscreteUniform<>{rng});
 
 		// create oob indices
-		std::vector<std::size_t>::iterator oobStart = subsetIndices.begin() + subsetSize;
-		std::vector<std::size_t>::iterator oobEnd   = subsetIndices.end();
-		
+		std::vector<std::size_t>::iterator oobStart = trainIndices.begin() + subsetSize;
+		std::vector<std::size_t>::iterator oobEnd   = trainIndices.end();
+
+		std::vector<std::size_t> oobIndicies(oobStart, oobEnd);
+
 		//generate the dataset by copying (TODO: this is a quick fix!
-		subsetIndices.erase(oobStart, oobEnd);
-		ClassificationDataset dataTrain = toDataset(subset(elements,subsetIndices));
+		trainIndices.erase(oobStart, oobEnd);
+		ClassificationDataset dataTrain = toDataset(subset(elements,trainIndices));
 
 		//Create attribute tables
 		AttributeTables tables;
@@ -213,8 +214,7 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 
 		// if oob error or importances have to be computed, create an oob sample
 		if(m_computeOOBerror || m_computeFeatureImportances){
-			std::vector<std::size_t> subsetIndicesOOB(oobStart, oobEnd);
-			ClassificationDataset dataOOB = toDataset(subset(elements, subsetIndicesOOB));
+			ClassificationDataset dataOOB = toDataset(subset(elements, oobIndicies));
 
 			// if importances should be computed, oob errors are computed implicitly
 			if(m_computeFeatureImportances){
@@ -227,12 +227,17 @@ void RFTrainer::train(RFClassifier& model, ClassificationDataset const& dataset)
 
 		SHARK_CRITICAL_REGION{
 			model.addModel(cart);
+			for(auto i : oobIndicies){
+				auto histogram = cart(elements[i].input);
+				auto j = detail::cart::argmax(histogram);
+				++oobClassTally(i,j);
+			}
 		}
 	}
 
 	// compute the oob error for the whole ensemble
 	if(m_computeOOBerror){
-		model.computeOOBerror();
+		model.computeOOBerror(oobClassTally,elements);
 	}
 
 	// compute the feature importances for the whole ensemble
